@@ -1,0 +1,123 @@
+slam_toolbox:
+  ros__parameters:
+
+    # Solver
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    # Frames + topic
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_link
+    scan_topic: /scan_filtered   # filtered by scan_filter_node
+    mode: mapping
+
+    # Logging / clocks
+    debug_logging: false
+    throttle_scans: 1
+    transform_publish_period: 0.05      # 20Hz TF
+    map_update_interval: 2.0            # whole-house graphs re-rasterize the
+                                        # full map each update; 1s starved the
+                                        # Atom as the map grew. 2s keeps the
+                                        # dashboard live enough.
+    resolution: 0.05                    # 5 cm grid
+    max_laser_range: 6.0                # match scan filter ceiling
+    minimum_time_interval: 0.2          # A1 only scans ~5.5Hz; don't drop
+    transform_timeout: 0.2
+    tf_buffer_duration: 30.
+    stack_size_to_use: 40000000
+    enable_interactive_mode: true
+
+    # Motion gating — tight because no wheel odometry; every move matters
+    use_scan_matching: true
+    use_scan_barycenter: true
+    # Add a new scan to the map every 20 cm of travel (lowered from 40 cm) so
+    # walls in newly-entered area get marked ~2x sooner during slow indoor
+    # mapping. Tradeoff: more overlap between consecutive scans, so if odometry
+    # is off this can re-introduce the "duplicate wall" stacking that 40 cm was
+    # raised to suppress. If that returns, fix odometry rather than re-raising.
+    minimum_travel_distance: 0.2
+    minimum_travel_heading: 0.2
+    scan_buffer_size: 30                  # was 20 — more reference scans for matching
+    scan_buffer_maximum_scan_distance: 6.0
+    # Higher response threshold rejects low-confidence matches. slam_toolbox
+    # falls back on the odom prior when it can't confidently match, which is
+    # safer than committing to a bad scan-match correction. Bumped from 0.15
+    # to 0.25: at 0.15 the matcher committed to noisy matches when the bot
+    # was barely moving, producing pose flicker. 0.25 demands the match be
+    # genuinely well-aligned before overriding the prior.
+    link_match_minimum_response_fine: 0.25
+    link_scan_maximum_distance: 1.5
+    # Loop closure tuned for ROOM-SCALE loops (kitchen-island orbits), not
+    # just building-scale ones. KEY KARTO MECHANIC (verified in Mapper.cpp,
+    # FindPossibleLoopClosure): candidates must be within
+    # loop_search_maximum_distance of the current pose AND NOT reachable from
+    # the current scan through graph links while staying inside that SAME
+    # radius (FindNearLinkedScans exclusion). At the old value (5.0) an
+    # island orbit sat entirely inside the exclusion disc — every scan in
+    # the loop was chain-linked and excluded, so loop closure could NEVER
+    # fire for a room-scale revisit ("it didn't realize it had seen that
+    # wall"), drift went uncorrected, and revisited walls were re-laid
+    # rotated (the doubled-kitchen gibberish). At 2.0 the far side of an
+    # island orbit exits the disc, the link traversal truncates, and the
+    # loop-start scans become eligible the moment the bot comes back around.
+    # The trade: after a LONG excursion, the return pose estimate must be
+    # within 2.0 m of the old chain for candidacy — fine while overall drift
+    # stays ~sub-meter, which closing the small loops continually maintains.
+    do_loop_closing: true
+    loop_search_maximum_distance: 2.0
+    loop_match_minimum_chain_size: 5
+    loop_match_maximum_variance_coarse: 5.0
+    loop_match_minimum_response_coarse: 0.25
+    # 0.55 → 0.50: orbit scans are mildly smeared (5.5 Hz lidar while
+    # turning); a closure that ALMOST clears the bar is worth taking — a
+    # missed closure costs a doubled room, a marginal one is still vetted by
+    # the coarse response + variance gates and refined by Ceres.
+    loop_match_minimum_response_fine: 0.50
+
+    # Narrowed from 1.0 (June 2026): the 1 m window existed to absorb the
+    # systematically-wrong odometry prior caused by the yaw=0 base->laser TF
+    # (the prior pointed ~92° off the true motion on every translation). With
+    # the TF fixed to the real -92° mount, the prior is correct in ALL
+    # maneuvers and the residual odom error per 0.2 m scan step is a few cm —
+    # a 0.6 m window covers it with margin, runs ~3x faster on the Atom, and
+    # critically gives self-similar revisited areas fewer wrong correlation
+    # peaks to snap to (karto commits the best peak UNCONDITIONALLY; a wide
+    # window during a weak smeared-scan match is how gibberish cascades).
+    correlation_search_space_dimension: 0.6
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+
+    # 8.0 → 5.0: candidates are now guaranteed within 2.0 m of the estimate,
+    # so a 5 m correlation window has huge margin and is ~2.5x cheaper on
+    # the Atom (closures now fire routinely on room loops — they must be
+    # affordable, not a once-a-run event).
+    loop_search_space_dimension: 5.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+
+    distance_variance_penalty: 0.5
+    # Doubled (was 1.0): a wider search space + low coarse_angle_resolution
+    # gives the matcher dozens of near-equal rotation hypotheses when the
+    # bot is barely turning. Bumping the angular variance penalty makes
+    # scan-matching prefer the EKF prior unless the rotation evidence is
+    # strong, which kills the "yaw thrashing while driving straight" mode.
+    angle_variance_penalty: 2.0
+    # Narrowed from ±45° back toward the default ±20°. The previous comment
+    # widened this to handle "IMU yaw prior off by 10-20° during turns";
+    # however with cmd_vel now driving the EKF reliably (20 Hz, RF2O vx
+    # disabled) the prior should stay within ±20°. The cost of the wider
+    # search was that small angular noise produced spurious rotation
+    # corrections — the matcher had so many hypotheses that it would
+    # commit to whichever flicker was best by chance. ±22.5° gives a small
+    # margin over the default while still constraining noise.
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.393   # ±22.5° (was 0.785 = ±45°)
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true

@@ -1,0 +1,69 @@
+# robot_localization EKF for the DeepRacer.
+# Fuses lidar_odom (LiDAR-measured forward velocity + lateral-zero constraint,
+# on /cmd_vel) + BMI160 IMU (yaw rate). Publishes odom->base_link.
+#
+# RF2O was REMOVED (2026-06): with the base_link->laser static TF claiming
+# yaw=0 while the A1 is physically mounted ~92° rotated, RF2O's twist is
+# laser-frame — the bot's FORWARD speed showed up in its "vy", so fusing
+# odom0 vy as a non-holonomic zero actually injected forward speed into the
+# EKF's lateral velocity. Its vyaw came from the same estimator that ignored
+# a real 2 ft push. The vy=0 constraint now comes from lidar_odom's twist.
+#
+# State vector order for the *_config arrays (15 elems):
+#   [x, y, z,  roll, pitch, yaw,  vx, vy, vz,  vroll, vpitch, vyaw,  ax, ay, az]
+ekf_filter_node:
+  ros__parameters:
+    frequency: 30.0
+    sensor_timeout: 0.2
+    two_d_mode: true
+    publish_tf: true
+    publish_acceleration: false
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+
+    # --- IMU: yaw rate only (BMI160 accel is too noisy to fuse) ---
+    # The gyro is the SOLE vyaw source (validated by hand-rotation tests);
+    # RF2O's vyaw cross-check was removed — see header.
+    imu0: /imu
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
+    imu0_queue_size: 10
+    imu0_differential: false
+    imu0_relative: false
+    imu0_remove_gravitational_acceleration: true
+
+    # --- lidar_odom (LiDAR-measured velocity): vx + lateral-zero ---
+    # lidar_odom.py measures forward speed by scan-matching consecutive raw
+    # scans (rotation removed via IMU) and publishes at 20 Hz on /cmd_vel
+    # (topic name kept from the old throttle bridge). vy is a constant 0
+    # with var 0.04 — the car's non-holonomic constraint.
+    twist0: /cmd_vel
+    twist0_config: [false, false, false,
+                    false, false, false,
+                    true,  true,  false,
+                    false, false, false,
+                    false, false, false]
+    twist0_queue_size: 5
+
+    # Standard robot_localization process-noise diagonal (well-tested defaults).
+    process_noise_covariance: [0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,  0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,  0.0,  0.06, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.06, 0.0,  0.0,  0.0,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.025,0.0,  0.0,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.025,0.0,  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.04, 0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01,  0.0,   0.0,   0.0,   0.0,   0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.01,  0.0,   0.0,   0.0,   0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.02,  0.0,   0.0,   0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,   0.01,  0.0,   0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,   0.0,   0.01,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,   0.0,   0.0,   0.015]

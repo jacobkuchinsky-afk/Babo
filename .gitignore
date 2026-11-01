@@ -1,0 +1,16 @@
+# Saved SLAM maps are floor plans of real rooms; keep them local.
+maps/
+*.posegraph
+*.data
+
+# Deploy archive of src/
+src.tgz
+
+# Runtime output written on the car
+autodrive_logs/
+*.jsonl
+*.log
+
+__pycache__/
+*.pyc
+.DS_Store

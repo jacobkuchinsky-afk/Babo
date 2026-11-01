@@ -1,0 +1,113 @@
+slam_toolbox:
+  ros__parameters:
+
+    # Solver
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    # Frames + topic
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_link
+    scan_topic: /scan_filtered
+    mode: localization                  # use saved map, just localize
+
+    # map_file_name is injected by slam_launch.py from $SLAM_MAP_FILE.
+    # Localization will refuse to start without it.
+
+    # Logging / clocks
+    debug_logging: false
+    throttle_scans: 1
+    transform_publish_period: 0.05
+    map_update_interval: 5.0            # we are not building, so update slower
+    resolution: 0.05
+    max_laser_range: 8.0
+    minimum_time_interval: 0.2
+    transform_timeout: 0.2
+    tf_buffer_duration: 30.
+    stack_size_to_use: 40000000
+    enable_interactive_mode: true
+
+    # HOW THIS ACTUALLY WORKS (verified against slam_toolbox foxy source):
+    # shouldProcessScan() DISCARDS every scan whose odom pose hasn't moved
+    # minimum_travel_distance from the last processed one — a discarded scan
+    # is never matched against ANYTHING (the old comment here claiming
+    # "every scan must loop-close against the saved map" was wrong; such
+    # scans are simply dropped). The ONE exception: each /initialpose sets
+    # first_measurement_=true, so the next scan bypasses the travel gate and
+    # runs ProcessAgainstNodesNearBy (a real match against the saved graph).
+    #
+    # We KEEP the travel thresholds effectively infinite ON PURPOSE: in this
+    # architecture the dashboard's Python layer (global_localize + the 1 Hz
+    # continuous local_scan_match in slam_module.py) owns localization and
+    # feeds slam_toolbox via /initialpose. Letting slam_toolbox free-run its
+    # own tracking on top would fight those corrections (its map-frame yaw
+    # convention differs from the yaw-offset-adjusted poses we publish).
+    # So slam_toolbox here = map server + TF bookkeeper + one verification
+    # match per /initialpose.
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_travel_distance: 1000.0   # never free-run; see block above
+    minimum_travel_heading: 100.0
+    scan_buffer_size: 1
+    scan_buffer_maximum_scan_distance: 8.0
+    # global_localize seeds slam_toolbox with the right starting pose
+    # via /initialpose, so per-scan tracking only has to do small local
+    # refinements. Permissive thresholds for tracking are fine — false-
+    # positive risk that used to cause "off the map" is mitigated because
+    # the seed pose is already correct.
+    link_match_minimum_response_fine: 0.15
+    link_scan_maximum_distance: 1.5
+    # Loop-closure thresholds — these are slam_toolbox's own scan-vs-map
+    # localization. We're no longer relying on these to find the initial
+    # pose (global_localize does that), so they can be permissive enough
+    # to handle ongoing scan refinement.
+    loop_search_maximum_distance: 5.0
+    do_loop_closing: true
+    loop_match_minimum_chain_size: 5
+    loop_match_maximum_variance_coarse: 3.0
+    # Tightened from 0.30/0.40 — during fast rotation in auto-drive the
+    # matcher was committing to noisy wrong matches, snapping the bot's
+    # pose to incorrect spots on the map. Better to skip and dead-reckon
+    # via EKF than to commit a bad match. global_localize re-anchors at
+    # the end of each phase if drift accumulates.
+    loop_match_minimum_response_coarse: 0.45
+    loop_match_minimum_response_fine: 0.55
+
+    # The sequential matcher only ever runs on the scan following an
+    # /initialpose publish, and that pose is already a scan-vs-map match
+    # from global_localize / local_scan_match. Its job is a LOCAL
+    # verification/refinement around a good seed — keep it small and fast
+    # (this runs on the Atom up to ~1×/s while driving; the previous full
+    # 360° × 1 m search burned seconds of CPU per poke).
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+
+    loop_search_space_dimension: 8.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+
+    distance_variance_penalty: 0.5
+    # PENALTY SEMANTICS (verified in karto source): the response of a
+    # candidate pose is MULTIPLIED by
+    #   max(1 - 0.2*offset²/variance_penalty, minimum_penalty)
+    # so a SMALLER variance_penalty and a SMALLER minimum_penalty both mean
+    # candidates far from the prior are punished HARDER. The previous values
+    # here (variance 0.1, floor 0.1) did the exact opposite of their stated
+    # intent — they crushed far-from-prior rotations to 10% response, making
+    # recovery from a large yaw error impossible while also paying for a
+    # full 360° search. Large-rotation recovery belongs to global_localize /
+    # the yaw-sweep escalation in slam_module.py, not to this matcher.
+    angle_variance_penalty: 1.0
+    fine_search_angle_offset: 0.00349
+    # Modest ±20° coarse search around the (already good) seeded yaw.
+    coarse_search_angle_offset: 0.349
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true
